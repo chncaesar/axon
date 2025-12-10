@@ -1,12 +1,11 @@
-import json
 import logging
 from typing import Any, Final, Literal, cast
 
 from pydantic import BaseModel, Field
 
-from axon.agents import Agent
+from axon.agents.agent import Agent
 from axon.llms import LLM
-from axon.tasks import Task
+from axon.tasks.task import Task
 
 
 class ReasoningPlan(BaseModel):
@@ -20,30 +19,6 @@ class AgentReasoningOutput(BaseModel):
     """Representing the output of the agent reasoning process."""
 
     plan: ReasoningPlan = Field(description="The reasoning plan for the task.")
-
-
-FUNCTION_SCHEMA: Final[dict[str, Any]] = {
-    "type": "function",
-    "function": {
-        "name": "create_reasoning_plan",
-        "description": "Create or refine a reasoning plan for a task",
-        "parameters": {
-            "type": "object",
-            "properties": {
-                "plan": {
-                    "type": "string",
-                    "description": "The detailed reasoning plan for the task.",
-                },
-                "ready": {
-                    "type": "boolean",
-                    "description": "Whether the agent is ready to execute the task.",
-                },
-            },
-            "required": ["plan", "ready"],
-        },
-    },
-}
-
 
 class AgentReasoning:
     """
@@ -83,9 +58,8 @@ class AgentReasoning:
             plan, ready = self.__refine_plan_if_needed(plan, ready)
             reasoning_plan = ReasoningPlan(plan=plan, ready=ready)
             return AgentReasoningOutput(plan=reasoning_plan)
-        except Exception as e:
-            # Emit reasoning failed event            
-            logging.error(f"Error emitting reasoning failed event: {e}")
+        except Exception as e:                   
+            logging.error(f"Error creating reasoning plan: {e}")
             raise
 
     def __create_initial_plan(self) -> tuple[str, bool]:
@@ -118,26 +92,20 @@ class AgentReasoning:
             The refined plan and whether the agent is ready to execute the task.
         """
         attempt = 1
-        max_attempts = self.agent.max_reasoning_attempts
+        max_attempts = getattr(self.agent,"max_reasoning_attempts",3)
 
-        while not ready and (max_attempts is None or attempt < max_attempts):
-            
-            
-
+        while not ready or attempt < max_attempts:
             refine_prompt = self.__create_refine_prompt(plan)
 
-            if self.llm.supports_function_calling():
-                plan, ready = self.__call_with_function(refine_prompt, "refine_plan")
-            else:
-                response = _call_llm_with_reasoning_prompt(
-                    llm=self.llm,
-                    prompt=refine_prompt,
-                    task=self.task,
-                    reasoning_agent=self.agent,
-                    backstory=self.__get_agent_backstory(),
-                    plan_type="refine_plan",
-                )
-                plan, ready = self.__parse_reasoning_response(str(response))
+            response = _call_llm_with_reasoning_prompt(
+                llm=self.llm,
+                prompt=refine_prompt,
+                task=self.task,
+                reasoning_agent=self.agent,
+                backstory=self.__get_agent_backstory(),
+                plan_type="refine_plan",
+            )
+            plan, ready = self.__parse_reasoning_response(str(response))
 
             attempt += 1
 
@@ -148,91 +116,7 @@ class AgentReasoning:
                 break
 
         return plan, ready
-
-    def __call_with_function(self, prompt: str, prompt_type: str) -> tuple[str, bool]:
-        """Calls the LLM with function calling to get a reasoning plan.
-
-        Args:
-            prompt: The prompt to send to the LLM.
-            prompt_type: The type of prompt (initial_plan or refine_plan).
-
-        Returns:
-            A tuple containing the plan and whether the agent is ready.
-        """
-        self.logger.debug(f"Using function calling for {prompt_type} reasoning")
-
-        try:
-            system_prompt = self.agent.i18n.retrieve("reasoning", prompt_type).format(
-                role=self.agent.role,
-                goal=self.agent.goal,
-                backstory=self.__get_agent_backstory(),
-            )
-
-            # Prepare a simple callable that just returns the tool arguments as JSON
-            def _create_reasoning_plan(plan: str, ready: bool = True) -> str:
-                """Return the reasoning plan result in JSON string form."""
-                return json.dumps({"plan": plan, "ready": ready})
-
-            response = self.llm.call(
-                [
-                    {"role": "system", "content": system_prompt},
-                    {"role": "user", "content": prompt},
-                ],
-                tools=[FUNCTION_SCHEMA],
-                available_functions={"create_reasoning_plan": _create_reasoning_plan},
-                from_task=self.task,
-                from_agent=self.agent,
-            )
-
-            self.logger.debug(f"Function calling response: {response[:100]}...")
-
-            try:
-                result = json.loads(response)
-                if "plan" in result and "ready" in result:
-                    return result["plan"], result["ready"]
-            except (json.JSONDecodeError, KeyError):
-                pass
-
-            response_str = str(response)
-            return (
-                response_str,
-                "READY: I am ready to execute the task." in response_str,
-            )
-
-        except Exception as e:
-            self.logger.warning(
-                f"Error during function calling: {e!s}. Falling back to text parsing."
-            )
-
-            try:
-                system_prompt = self.agent.i18n.retrieve(
-                    "reasoning", prompt_type
-                ).format(
-                    role=self.agent.role,
-                    goal=self.agent.goal,
-                    backstory=self.__get_agent_backstory(),
-                )
-
-                fallback_response = self.llm.call(
-                    [
-                        {"role": "system", "content": system_prompt},
-                        {"role": "user", "content": prompt},
-                    ],
-                    from_task=self.task,
-                    from_agent=self.agent,
-                )
-
-                fallback_str = str(fallback_response)
-                return (
-                    fallback_str,
-                    "READY: I am ready to execute the task." in fallback_str,
-                )
-            except Exception as inner_e:
-                self.logger.error(f"Error during fallback text parsing: {inner_e!s}")
-                return (
-                    "Failed to generate a plan due to an error.",
-                    True,
-                )  # Default to ready to avoid getting stuck
+    
 
     def __get_agent_backstory(self) -> str:
         """
@@ -250,7 +134,7 @@ class AgentReasoning:
         Returns:
             str: The reasoning prompt.
         """
-        return self.agent.retrieve("reasoning", "create_plan_prompt").format(
+        return self.agent.prompt.retrieve("reasoning", "create_plan_prompt").format(
             role=self.agent.role,
             goal=self.agent.goal,
             backstory=self.__get_agent_backstory(),
@@ -269,7 +153,7 @@ class AgentReasoning:
         Returns:
             str: The refine prompt.
         """
-        return self.agent.i18n.retrieve("reasoning", "refine_plan_prompt").format(
+        return self.agent.prompt.retrieve("reasoning", "refine_plan_prompt").format(
             role=self.agent.role,
             goal=self.agent.goal,
             backstory=self.__get_agent_backstory(),
@@ -299,19 +183,6 @@ class AgentReasoning:
 
         return plan, ready
 
-    def _handle_agent_reasoning(self) -> AgentReasoningOutput:
-        """
-        Deprecated method for backward compatibility.
-        Use handle_agent_reasoning() instead.
-
-        Returns:
-            AgentReasoningOutput: The output of the agent reasoning process.
-        """
-        self.logger.warning(
-            "The _handle_agent_reasoning method is deprecated. Use handle_agent_reasoning instead."
-        )
-        return self.handle_agent_reasoning()
-
 
 def _call_llm_with_reasoning_prompt(
     llm: LLM,
@@ -334,7 +205,7 @@ def _call_llm_with_reasoning_prompt(
     Returns:
         The LLM response.
     """
-    system_prompt = reasoning_agent.retrieve("reasoning", plan_type).format(
+    system_prompt = reasoning_agent.prompt.retrieve("reasoning", plan_type).format(
         role=reasoning_agent.role,
         goal=reasoning_agent.goal,
         backstory=backstory,

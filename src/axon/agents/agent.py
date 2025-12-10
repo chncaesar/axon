@@ -1,6 +1,7 @@
 from typing import Any
 from pydantic import Field, model_validator
 from axon.agents.base_agent import BaseAgent
+from axon.prompt.prompt import Prompt
 from axon.tools.base_tool import BaseTool
 from axon.tasks.task import Task
 from axon.utilities.llm_utilities import create_llm
@@ -11,6 +12,11 @@ class Agent(BaseAgent):
         default=False,
         description="Whether the agent should reflect and create a plan before executing a task.",
     )
+    max_reasoning_attempts: int | None = Field(
+        default=3,
+        description="Maximum number of reasoning attempts before executing the task. If None, will try until ready.",
+    )
+    
 
     @model_validator(mode="after")
     def init(self):

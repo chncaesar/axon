@@ -10,6 +10,7 @@ from abc import ABC, abstractmethod
 from axon.tools.base_tool import BaseTool
 from axon.llms.llm import LLM
 from axon.tasks.task import Task
+from axon.prompt.prompt import Prompt, get_prompt
 
 
 class BaseAgent(BaseModel, ABC):
@@ -17,10 +18,17 @@ class BaseAgent(BaseModel, ABC):
     name: str = Field()
     llm: LLM = Field()
     task: Task = Field()
-    background: str = Field(description="Background of the agent")
+    role: str = Field(description="Role of the agent")
+    goal: str = Field(description="Objective of the agent")
+    backstory: str = Field(description="Backstory of the agent")
     config: dict[str, Any] | None = Field(
         description="Configuration for the agent", default=None, exclude=True
     )
+    prompt: Prompt = Field(
+        default_factory=get_prompt, description="prompt settings."
+    )
+
+    
 
     @abstractmethod
     def execute_task(

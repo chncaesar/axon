@@ -2,9 +2,12 @@ import logging
 import re
 import json
 from abc import ABC, abstractmethod
-from axon.types import LLMMessage
 from typing import Any, Final
 from pydantic import BaseModel
+
+from axon.types import LLMMessage
+from axon.tasks.task import Task
+from axon.agents.agent import Agent
 
 DEFAULT_CONTEXT_WINDOW_SIZE: Final[int] = 8192
 _JSON_EXTRACTION_PATTERN: Final[re.Pattern[str]] = re.compile(r"\{.*}", re.DOTALL)
@@ -26,9 +29,9 @@ class BaseLLM(ABC):
         """ Creates an BaseLLM instances
         Args:
             model: The model name
-            temperatue: Optional model's temperature
+            temperature: Optional model's temperature
             api_key: Model's api key
-            base url: Model base url
+            base_url: Model base url
             provider: Model provider, for instance anthropic
             kwargs: Additional provider specific parameters            
         """
@@ -153,15 +156,19 @@ class BaseLLM(ABC):
     @abstractmethod
     def call(
         self,
-        message: str
+        message: str | list[LLMMessage],
+        from_task: Task | None = None,
+        from_agent: Agent | None = None,
     ) -> str:
         """Call the LLM with the given messages.
 
         Args:
-            messages: Input messages for the LLM.
+            message: Input messages for the LLM.
                         Can be a string or list of message dictionaries.
                         If string, it will be converted to a single user message.
                         If list, each dict must have 'role' and 'content' keys.
+            from_task: Optional task context
+            from_agent: Optional agent context
         Returns:
             A text response from the LLM (str)                         
 
