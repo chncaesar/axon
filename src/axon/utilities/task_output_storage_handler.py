@@ -6,7 +6,7 @@ from persistent storage, supporting replay and audit capabilities.
 
 from typing import Any
 
-from axon.memory.storage.kickoff_task_outputs_storage import (
+from axon.memory.storage.kickoff_task_output_storage import (
     KickoffTaskOutputsSQLiteStorage,
 )
 from axon.tasks import Task

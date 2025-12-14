@@ -23,6 +23,7 @@ from axon.utilities.file_handler import FileHandler
 from axon.utilities.task_output_storage_handler import TaskOutputStorageHandler
 from axon.utilities.printer import PrinterColor
 from axon.axon_output import AxonOutput
+from axon.process import Process
 
 class Orchestrator(BaseModel):
     __hash__ = object.__hash__
@@ -63,6 +64,8 @@ class Orchestrator(BaseModel):
     _task_output_handler: TaskOutputStorageHandler = PrivateAttr(
         default_factory=TaskOutputStorageHandler
     )
+    _train: bool | None = PrivateAttr(default=False)
+    process: Process = Field(default=Process.sequential)
 
     def kickoff(
         self,
@@ -76,18 +79,10 @@ class Orchestrator(BaseModel):
                 self._inputs = inputs
                 self._interpolate_inputs(inputs)
             self._set_tasks_callbacks()
-            self._set_allow_crewai_trigger_context_for_first_task()
+            self._set_allow_trigger_context_for_first_task()
 
             for agent in self.agents:
-                agent.crew = self
-                agent.set_knowledge(crew_embedder=self.embedder)
-                # TODO: Create an AgentFunctionCalling protocol for future refactoring
-                if not agent.function_calling_llm:  # type: ignore # "BaseAgent" has no attribute "function_calling_llm"
-                    agent.function_calling_llm = self.function_calling_llm  # type: ignore # "BaseAgent" has no attribute "function_calling_llm"
-
-                if not agent.step_callback:  # type: ignore # "BaseAgent" has no attribute "step_callback"
-                    agent.step_callback = self.step_callback  # type: ignore # "BaseAgent" has no attribute "step_callback"
-
+                agent.orchestrator = self
                 agent.create_agent_executor()
 
             if self.planning:
@@ -113,13 +108,30 @@ class Orchestrator(BaseModel):
         finally:
             detach(token)
 
-    def _interpolate_inputs(self, inputs: dict[str, Any]) -> None:
-        """Interpolates the inputs in the tasks and agents."""
-        [
-            task.interpolate_inputs_and_add_conversation_history(
-                inputs
-            )
-            for task in self.tasks
-        ]
+    def _interpolate_inputs(self, inputs: dict[str, Any] ) -> None:
+        """Interpolates the inputs in the tasks and agents"""
         for agent in self.agents:
-            agent.interpolate_inputs(inputs)            
+            agent.interpolate_inputs(inputs)
+        for task in self.tasks:
+            task.interpolate_inputs_and_add_conversation_history(inputs)
+
+    def _set_tasks_callbacks(self) -> None:
+        """Sets callback for every task suing task_callback"""
+        for task in self.tasks:
+            if not task.callback:
+                task.callback = self.task_callback
+
+    def _set_allow_trigger_context_for_first_task(self) -> None:
+        trigger_payload = self._inputs and self._inputs.get(
+            "trigger_payload"
+        )
+        able_to_inject = (
+            self.tasks and self.tasks[0].allow_trigger_context is None
+        )
+
+        if (
+            self.process == Process.sequential
+            and trigger_payload
+            and able_to_inject
+        ):
+            self.tasks[0].allow_trigger_context = True

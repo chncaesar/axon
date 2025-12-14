@@ -1,16 +1,17 @@
-from pydantic import BaseModel,Field, PrivateAttr
+import json
 from typing import Any
+from pydantic import BaseModel,Field,PrivateAttr
 from axon.utilities.string_utils import interpolate_only
 from axon.prompt.prompt import Prompt, get_prompt
 from axon.utilities.printer import Printer
 
-import json
 
 _printer = Printer()
 
 
 class Task(BaseModel):
     """"""
+    prompt: Prompt = Field(default_factory=get_prompt)
     description: str = Field(description="Description of the actual task.")
     expected_output: str = Field(
         description="Clear definition of expected output for the task."
@@ -18,13 +19,17 @@ class Task(BaseModel):
     _original_description: str | None = PrivateAttr(default=None)
     _original_expected_output: str | None = PrivateAttr(default=None)
     _original_output_file: str | None = PrivateAttr(default=None)
-
     output_file: str | None = Field(
         description="A file path to be used to create a file output.",
         default=None,
     )
-    prompt: Prompt = Field(default_factory=get_prompt)
-
+    callback: Any | None = Field(
+        description="Callback to be executed after the task is completed.", default=None
+    )
+    allow_trigger_context: bool | None = Field(
+        default=None,
+        description="Whether this task should append 'Trigger Payload: {crewai_trigger_payload}' to the task description when crewai_trigger_payload exists in crew inputs.",
+    )
 
     def interpolate_inputs_and_add_conversation_history(
         self, inputs: dict[str, str | int | float | dict[str, Any] | list[Any]]
@@ -80,10 +85,10 @@ class Task(BaseModel):
                 "conversation_history_instruction"
             )
 
-            messages_json = str(inputs["chat_messages"])
+            chat_messages_json = str(inputs["chat_messages"])
 
             try:
-                chat_messages = json.loads(messages_json)
+                chat_messages = json.loads(chat_messages_json)
             except json.JSONDecodeError as e:
                 _printer.print(
                     f"An error occurred while parsing crew chat messages: {e}",

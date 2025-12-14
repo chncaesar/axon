@@ -1,3 +1,4 @@
+import json
 from typing import Any
 from pydantic import Field, model_validator
 from axon.agents.base_agent import BaseAgent
@@ -5,8 +6,10 @@ from axon.prompt.prompt import Prompt
 from axon.tools.base_tool import BaseTool
 from axon.tasks.task import Task
 from axon.utilities.llm_utilities import create_llm
+from axon.utilities.prompts import Prompts
 
 class Agent(BaseAgent):
+    orchestrator: Any = Field(default=None, description="The orchestrator to which the agent belongs.")
 
     reasoning: bool = Field(
         default=False,
@@ -298,3 +301,46 @@ class Agent(BaseAgent):
         self._cleanup_mcp_clients()
 
         return result
+
+    def create_agent_executor(
+        self, tools: list[BaseTool] | None = None, task: Task | None = None
+    ) -> None:
+        """Create an agent executor for the agent.
+
+        Returns:
+            An instance of the AgentExecutor class.
+        """        
+
+        prompt = Prompts(
+            agent=self,
+            prompt=self.prompt,
+            use_system_prompt=self.use_system_prompt,
+            system_template=self.system_template,
+            prompt_template=self.prompt_template,
+            response_template=self.response_template,
+        ).task_execution()
+
+        stop_words = [self.prompt.slice("observation")]
+
+        if self.response_template:
+            stop_words.append(
+                self.response_template.split("{{ .Response }}")[1].strip()
+            )
+
+        self.agent_executor = AgentExecutor(
+            llm=self.llm,
+            task=task,  # type: ignore[arg-type]
+            agent=self,
+            orchestrator=self.orchestrator,            
+            prompt=prompt,            
+            stop_words=stop_words,
+            max_iter=self.max_iter,
+            tools_handler=self.tools_handler,
+            step_callback=self.step_callback,
+            function_calling_llm=self.function_calling_llm,
+            respect_context_window=self.respect_context_window,
+            request_within_rpm_limit=(
+                self._rpm_controller.check_or_wait if self._rpm_controller else None
+            ),
+            response_model=task.response_model if task else None,
+        )    
