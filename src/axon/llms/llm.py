@@ -56,6 +56,7 @@ class LLM(BaseLLM):
         # return None, if provider is not supported
         return None        
 
+    def __init__(
 
     @classmethod
     def _get_provider_class( provider: str) -> type | None:
@@ -65,6 +66,9 @@ class LLM(BaseLLM):
             return OpenAICompletion
         
         return None
+
+    def get_context_window_size(self) -> int:
+        return self.context_window_size
 
 
 

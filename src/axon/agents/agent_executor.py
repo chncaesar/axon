@@ -1,6 +1,7 @@
-from typing import Any, cast
+from typing import Any, cast, Literal
 from pydantic import BaseModel
 
+from axon import orchestrator
 from axon.agents.base_agent import BaseLLM
 from axon.tasks.task import Task
 from axon.orchestrator import Orchestrator
@@ -58,6 +59,7 @@ class AgentExecutor():
         """
         self._prompt: Prompt = get_prompt()
         self.llm = llm
+        self.agent = agent
         self.task = task
         self.orchestrator = orchestrator
         self.prompt = prompt
@@ -68,6 +70,7 @@ class AgentExecutor():
         self.iterations = 0
         self.log_error_after = 3
         self._printer: Printer = Printer()
+        
 
         if self.llm:
             existing_stop = getattr(self.llm, "stop", [])
@@ -123,7 +126,7 @@ class AgentExecutor():
             raise    
         
         
-        formatted_answer = self._handle_human_feedback(formatted_answer)
+        #formatted_answer = self._handle_human_feedback(formatted_answer)
 
         return {"output": formatted_answer.output}
 
@@ -140,7 +143,7 @@ class AgentExecutor():
                     formatted_answer = handle_max_iterations_exceeded(
                         formatted_answer,
                         printer=self._printer,
-                        i18n=self._i18n,
+                        i18n=self._prompt,
                         messages=self.messages,
                         llm=self.llm,
                     )
@@ -174,8 +177,7 @@ class AgentExecutor():
                         printer=self._printer,
                         messages=self.messages,
                         llm=self.llm,
-                        callbacks=self.callbacks,
-                        i18n=self._i18n,
+                        i18n=self._prompt,
                     )
                     continue
                 handle_unknown_error(self._printer, e)
@@ -252,3 +254,13 @@ class AgentExecutor():
             )
         return response
     
+    def _append_message(
+        self, 
+        text: str, 
+        role: Literal["user", "assistant", "system"] = "assistant",
+    ) -> None:
+        self.messages.append(format_message_for_llm(text, role))
+
+
+    def _is_training_mode(self) -> bool:
+        return bool(self.orchestrator and self.orchestrator._train)

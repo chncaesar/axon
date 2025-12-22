@@ -177,3 +177,11 @@ class BaseLLM(ABC):
             TimeoutError: If the LLM request times out.
             RuntimeError: If the LLM request fails for other reasons.
         """        
+
+    def get_context_window_size(size) -> int:
+        """Get the context window size for the LLM.
+
+        Returns:
+            The number of tokens/characters the model can handle.
+        """
+        return DEFAULT_CONTEXT_WINDOW_SIZE

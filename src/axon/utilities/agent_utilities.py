@@ -243,3 +243,18 @@ def is_context_length_exceeded(exception: Exception) -> bool:
         bool: True if the exception is due to context length exceeding
     """
     return LLMContextLengthExceededError(str(exception))._is_context_limit_error(str(exception))
+
+def summarize_messages(
+    messages: list[LLMMessage],
+    llm: LLM | BaseLLM,
+    prompt: Prompt
+) -> None:
+    """Summarize messages to fit within context window.
+
+    Args:
+        messages: List of messages to summarize
+        llm: LLM instance for summarization
+        prompt: prompt instance for messages
+    """
+    messages_str = " ".join([message["content"] for message in messages])
+    cut_size = llm.get_context_window_size()
