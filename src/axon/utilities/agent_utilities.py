@@ -248,7 +248,7 @@ def summarize_messages(
     messages: list[LLMMessage],
     llm: LLM | BaseLLM,
     prompt: Prompt
-) -> None:
+) -> list[LLMMessage]:
     """Summarize messages to fit within context window.
 
     Args:
@@ -258,3 +258,39 @@ def summarize_messages(
     """
     messages_str = " ".join([message["content"] for message in messages])
     cut_size = llm.get_context_window_size()
+    message_group = [{"content": messages_str[i: i + cut_size]} for i in range(0, len(messages_str), cut_size)]
+
+    summarized_messages = []
+    group_size = len(message_group)
+
+    for idx, group in enumerate(message_group):
+        Printer.print(f"Summarizing group {idx + 1} of {group_size}", color="yellow")
+        messages = [
+            format_message_for_llm(prompt.slice("summarizer_system_message"), role="system"),
+            format_message_for_llm(prompt.slice("summarize_instruction").format(group=group), role="user"),
+        ]
+
+        summary = llm.call(messages)
+        summarized_messages.append({"content": str(summary)})
+   
+    merged_summary = " ".join([message["content"] for message in summarized_messages])
+    
+    result = [
+        format_message_for_llm(prompt.slice("summary").format(summary=merged_summary)),
+    ]
+    return result
+
+def handle_context_length(
+    messages: list[LLMMessage],
+    llm: LLM | BaseLLM,
+    prompt: Prompt,
+    printer: Printer
+) -> list[LLMMessage]:
+    """Handle context length by summarizing messages if needed."""
+    if llm.get_context_window_size() < len(messages):
+        printer.print(
+            content="Context length exceeded. Summarizing content to fit the model context window. Might take a while...",
+            color="yellow",
+        )
+        return summarize_messages(messages, llm, prompt)
+    return messages

@@ -7,6 +7,7 @@ from axon.tools.base_tool import BaseTool
 from axon.tasks.task import Task
 from axon.utilities.llm_utilities import create_llm
 from axon.utilities.prompts import Prompts
+from axon.utilities.converter import generate_model_description
 from axon.agents.agent_executor import AgentExecutor
 
 class Agent(BaseAgent):
@@ -98,15 +99,7 @@ class Agent(BaseAgent):
             )
 
         if self._is_any_available_memory():
-            crewai_event_bus.emit(
-                self,
-                event=MemoryRetrievalStartedEvent(
-                    task_id=str(task.id) if task else None,
-                    source_type="agent",
-                    from_agent=self,
-                    from_task=task,
-                ),
-            )
+            
 
             start_time = time.time()
 
@@ -122,29 +115,13 @@ class Agent(BaseAgent):
             if memory.strip() != "":
                 task_prompt += self.i18n.slice("memory").format(memory=memory)
 
-            crewai_event_bus.emit(
-                self,
-                event=MemoryRetrievalCompletedEvent(
-                    task_id=str(task.id) if task else None,
-                    memory_content=memory,
-                    retrieval_time_ms=(time.time() - start_time) * 1000,
-                    source_type="agent",
-                    from_agent=self,
-                    from_task=task,
-                ),
-            )
+            
         knowledge_config = (
             self.knowledge_config.model_dump() if self.knowledge_config else {}
         )
 
         if self.knowledge or (self.crew and self.crew.knowledge):
-            crewai_event_bus.emit(
-                self,
-                event=KnowledgeRetrievalStartedEvent(
-                    from_task=task,
-                    from_agent=self,
-                ),
-            )
+            
             try:
                 self.knowledge_search_query = self._get_knowledge_search_query(
                     task_prompt, task
@@ -173,34 +150,9 @@ class Agent(BaseAgent):
                         if self.crew_knowledge_context:
                             task_prompt += self.crew_knowledge_context
 
-                    crewai_event_bus.emit(
-                        self,
-                        event=KnowledgeRetrievalCompletedEvent(
-                            query=self.knowledge_search_query,
-                            from_task=task,
-                            from_agent=self,
-                            retrieved_knowledge=(
-                                (self.agent_knowledge_context or "")
-                                + (
-                                    "\n"
-                                    if self.agent_knowledge_context
-                                    and self.crew_knowledge_context
-                                    else ""
-                                )
-                                + (self.crew_knowledge_context or "")
-                            ),
-                        ),
-                    )
+                    
             except Exception as e:
-                crewai_event_bus.emit(
-                    self,
-                    event=KnowledgeSearchQueryFailedEvent(
-                        query=self.knowledge_search_query or "",
-                        error=str(e),
-                        from_task=task,
-                        from_agent=self,
-                    ),
-                )
+                pass
 
         tools = tools or self.tools or []
         self.create_agent_executor(tools=tools, task=task)
@@ -211,22 +163,10 @@ class Agent(BaseAgent):
             task_prompt = self._use_trained_data(task_prompt=task_prompt)
 
         # Import agent events locally to avoid circular imports
-        from crewai.events.types.agent_events import (
-            AgentExecutionCompletedEvent,
-            AgentExecutionErrorEvent,
-            AgentExecutionStartedEvent,
-        )
+        
 
         try:
-            crewai_event_bus.emit(
-                self,
-                event=AgentExecutionStartedEvent(
-                    agent=self,
-                    tools=self.tools,
-                    task_prompt=task_prompt,
-                    task=task,
-                ),
-            )
+            
 
             # Determine execution method based on timeout setting
             if self.max_execution_time is not None:
@@ -245,37 +185,16 @@ class Agent(BaseAgent):
 
         except TimeoutError as e:
             # Propagate TimeoutError without retry
-            crewai_event_bus.emit(
-                self,
-                event=AgentExecutionErrorEvent(
-                    agent=self,
-                    task=task,
-                    error=str(e),
-                ),
-            )
+            
             raise e
         except Exception as e:
             if e.__class__.__module__.startswith("litellm"):
                 # Do not retry on litellm errors
-                crewai_event_bus.emit(
-                    self,
-                    event=AgentExecutionErrorEvent(
-                        agent=self,
-                        task=task,
-                        error=str(e),
-                    ),
-                )
+                
                 raise e
             self._times_executed += 1
             if self._times_executed > self.max_retry_limit:
-                crewai_event_bus.emit(
-                    self,
-                    event=AgentExecutionErrorEvent(
-                        agent=self,
-                        task=task,
-                        error=str(e),
-                    ),
-                )
+                
                 raise e
             result = self.execute_task(task, context, tools)
 
@@ -288,10 +207,7 @@ class Agent(BaseAgent):
         for tool_result in self.tools_results:
             if tool_result.get("result_as_answer", False):
                 result = tool_result["result"]
-        crewai_event_bus.emit(
-            self,
-            event=AgentExecutionCompletedEvent(agent=self, task=task, output=result),
-        )
+       
 
         self._last_messages = (
             self.agent_executor.messages.copy()
@@ -336,12 +252,6 @@ class Agent(BaseAgent):
             prompt=prompt,            
             stop_words=stop_words,
             max_iter=self.max_iter,
-            tools_handler=self.tools_handler,
-            step_callback=self.step_callback,
-            function_calling_llm=self.function_calling_llm,
             respect_context_window=self.respect_context_window,
-            request_within_rpm_limit=(
-                self._rpm_controller.check_or_wait if self._rpm_controller else None
-            ),
             response_model=task.response_model if task else None,
         )    

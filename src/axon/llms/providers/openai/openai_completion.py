@@ -286,3 +286,39 @@ class OpenAICompletion(BaseLLM):
                 error=error_msg, from_task=from_task, from_agent=from_agent
             )
             raise
+    
+    def get_context_window_size(self) -> int:
+        """Get the context window size for the model."""
+        from axon.llms.llm import CONTEXT_WINDOW_USAGE_RATIO, LLM_CONTEXT_WINDOW_SIZES
+
+        min_context = 1024
+        max_context = 2097152
+
+        for key, value in LLM_CONTEXT_WINDOW_SIZES.items():
+            if value < min_context or value > max_context:
+                raise ValueError(
+                    f"Context window for {key} must be between {min_context} and {max_context}"
+                )
+
+        # Context window sizes for OpenAI models
+        context_windows = {
+            "gpt-4": 8192,
+            "gpt-4o": 128000,
+            "gpt-4o-mini": 200000,
+            "gpt-4-turbo": 128000,
+            "gpt-4.1": 1047576,
+            "gpt-4.1-mini-2025-04-14": 1047576,
+            "gpt-4.1-nano-2025-04-14": 1047576,
+            "o1-preview": 128000,
+            "o1-mini": 128000,
+            "o3-mini": 200000,
+            "o4-mini": 200000,
+        }
+
+        # Find the best match for the model name
+        for model_prefix, size in context_windows.items():
+            if self.model.startswith(model_prefix):
+                return int(size * CONTEXT_WINDOW_USAGE_RATIO)
+
+        # Default context window size
+        return int(8192 * CONTEXT_WINDOW_USAGE_RATIO)

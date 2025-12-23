@@ -1,9 +1,12 @@
+import httpx
 from __future__ import annotations
 
-from typing import Any, Final, cast
+from typing import Any, Final, cast, Literal
 from typing_extensions import Self
+from pydantic import BaseModel
 
 from axon.agents.base_agent import BaseLLM
+from axon.llms.base_interceptor import BaseInterceptor
 
 SUPPORTED_NATIVE_PROVIDERS: Final[list[str]] = [
     "openai",    
@@ -56,7 +59,7 @@ class LLM(BaseLLM):
         # return None, if provider is not supported
         return None        
 
-    def __init__(
+    
 
     @classmethod
     def _get_provider_class( provider: str) -> type | None:

@@ -1,7 +1,6 @@
 from typing import Any, cast, Literal
 from pydantic import BaseModel
 
-from axon import orchestrator
 from axon.agents.base_agent import BaseLLM
 from axon.tasks.task import Task
 from axon.orchestrator import Orchestrator
@@ -43,7 +42,8 @@ class AgentExecutor():
         prompt: SystemPromptResult | StandardPromptResult,
         max_iter: int,
         stop_words: list[str],
-        response_model: type[BaseModel] | None = None
+        response_model: type[BaseModel] | None = None,
+        respect_context_window: bool = True
     ) -> None:
         """Initialize executor.
 
@@ -56,6 +56,7 @@ class AgentExecutor():
                 max_iter: Maximum iterations.
                 stop_words: Stop word list.
                 response_model: Optional Pydantic model for structured outputs.
+                respect_context_window: Whether to respect the context window.
         """
         self._prompt: Prompt = get_prompt()
         self.llm = llm
@@ -70,15 +71,16 @@ class AgentExecutor():
         self.iterations = 0
         self.log_error_after = 3
         self._printer: Printer = Printer()
+        self.respect_context_window: bool = respect_context_window
         
 
         if self.llm:
             existing_stop = getattr(self.llm, "stop", [])
             self.llm.stop = list[str](   
                 set[str](
-                    existing_stop + self.stop
+                    existing_stop + self.stop_words
                     if isinstance(existing_stop, list)
-                    else self.stop
+                    else self.stop_words
                 )
             )
     
@@ -99,13 +101,13 @@ class AgentExecutor():
             Dictionary with agent output.
         """
         if "system" in self.prompt:
-            system_prompt = self._format_promt(
+            system_prompt = self._format_prompt(
                 cast(str, self.prompt.get("system","")), inputs
             )
             user_prompt = self._format_prompt(
-                cast(str, self.prompt("user","")), inputs
+                cast(str, self.prompt.get("user","")), inputs
             )
-            self.messages.append(format_message_for_llm(system_prompt,role="system"))
+            self.messages.append(format_message_for_llm(system_prompt, role="system"))
             self.messages.append(format_message_for_llm(user_prompt))
         else:
             user_prompt = self._format_prompt(
@@ -158,6 +160,7 @@ class AgentExecutor():
                     response_model=self.response_model,
                     executor_context=self,
                 )
+                # TODO: should handle AgentAction
                 formatted_answer = process_llm_response(answer, self.use_stop_words)
 
                 self._append_message(formatted_answer.text)
@@ -188,7 +191,7 @@ class AgentExecutor():
     
 
     @staticmethod
-    def _format_promt(prompt: str, inputs: dict[str, Any]) -> str:
+    def _format_prompt(prompt: str, inputs: dict[str, Any]) -> str:
         """Format prompt with input values.
 
         Args:
@@ -202,21 +205,21 @@ class AgentExecutor():
         return prompt.replace("{tool}", inputs["tool"])
 
     
-    def _handle_human_feedback(self, formatted_answer: AgentFinish) -> AgentFinish:
-        """Process human feedback.
+    # def _handle_human_feedback(self, formatted_answer: AgentFinish) -> AgentFinish:
+    #     """Process human feedback.
 
-        Args:
-            formatted_answer: Initial agent result.
+    #     Args:
+    #         formatted_answer: Initial agent result.
 
-        Returns:
-            Final answer after feedback.
-        """
-        human_feedback = self._ask_human_input(formatted_answer.output)
+    #     Returns:
+    #         Final answer after feedback.
+    #     """
+    #     human_feedback = self._ask_human_input(formatted_answer.output)
 
-        if self._is_training_mode():
-            return self._handle_training_feedback(formatted_answer, human_feedback)
+    #     if self._is_training_mode():
+    #         return self._handle_training_feedback(formatted_answer, human_feedback)
 
-        return self._handle_regular_feedback(formatted_answer, human_feedback)
+    #     return self._handle_regular_feedback(formatted_answer, human_feedback)
 
     def _ask_human_input(self, final_answer: str) -> str:
         """Prompt human input with mode-appropriate messaging."""
