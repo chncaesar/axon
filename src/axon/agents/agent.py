@@ -1,14 +1,20 @@
 import json
-from typing import Any
-from pydantic import Field, model_validator
+from typing import Any, TYPE_CHECKING
+from pydantic import Field, model_validator, PrivateAttr
 from axon.agents.base_agent import BaseAgent
 from axon.prompt.prompt import Prompt
-from axon.tools.base_tool import BaseTool
 from axon.tasks.task import Task
 from axon.utilities.llm_utilities import create_llm
 from axon.utilities.prompts import Prompts
 from axon.utilities.converter import generate_model_description
 from axon.agents.agent_executor import AgentExecutor
+from axon.utilities.training_handler import TrainingHandler
+from axon.utilities.constants import TRAINING_DATA_FILE
+
+
+if TYPE_CHECKING:
+    from axon.types import LLMMessage
+
 
 class Agent(BaseAgent):
     orchestrator: Any = Field(default=None, description="The orchestrator to which the agent belongs.")
@@ -21,7 +27,29 @@ class Agent(BaseAgent):
         default=3,
         description="Maximum number of reasoning attempts before executing the task. If None, will try until ready.",
     )
-    
+    date_format: str = Field(
+        default="%Y-%m-%d",
+        description="Format string for date when inject_date is enabled.",
+    )
+    respect_context_window: bool = Field(
+        default=True,
+        description="Keep messages under the context window size by summarizing content.",
+    )
+    use_system_prompt: bool | None = Field(
+        default=True,
+        description="Use system prompt for the agent.",
+    )
+    system_template: str | None = Field(
+        default=None, description="System format for the agent."
+    )
+    prompt_template: str | None = Field(
+        default=None, description="Prompt format for the agent."
+    )
+    response_template: str | None = Field(
+        default=None, description="Response format for the agent."
+    )
+    _last_messages: list[LLMMessage] = PrivateAttr(default_factory=list)
+
 
     @model_validator(mode="after")
     def init(self):
@@ -68,9 +96,6 @@ class Agent(BaseAgent):
                 self._logger.log("error", f"Error during reasoning process: {e!s}")
         self._inject_date_to_task(task)
 
-        if self.tools_handler:
-            self.tools_handler.last_used_tool = None
-
         task_prompt = task.prompt()
 
         # If the task requires output in JSON or Pydantic format,
@@ -82,132 +107,32 @@ class Agent(BaseAgent):
             if task.output_json:
                 schema_dict = generate_model_description(task.output_json)
                 schema = json.dumps(schema_dict["json_schema"]["schema"], indent=2)
-                task_prompt += "\n" + self.i18n.slice(
+                task_prompt += "\n" + self.prompt.slice(
                     "formatted_task_instructions"
                 ).format(output_format=schema)
 
             elif task.output_pydantic:
                 schema_dict = generate_model_description(task.output_pydantic)
                 schema = json.dumps(schema_dict["json_schema"]["schema"], indent=2)
-                task_prompt += "\n" + self.i18n.slice(
+                task_prompt += "\n" + self.prompt.slice(
                     "formatted_task_instructions"
                 ).format(output_format=schema)
 
         if context:
-            task_prompt = self.i18n.slice("task_with_context").format(
+            task_prompt = self.prompt.slice("task_with_context").format(
                 task=task_prompt, context=context
             )
 
-        if self._is_any_available_memory():
-            
 
-            start_time = time.time()
+        self.create_agent_executor(task=task)
 
-            contextual_memory = ContextualMemory(
-                self.crew._short_term_memory,
-                self.crew._long_term_memory,
-                self.crew._entity_memory,
-                self.crew._external_memory,
-                agent=self,
-                task=task,
-            )
-            memory = contextual_memory.build_context_for_task(task, context or "")
-            if memory.strip() != "":
-                task_prompt += self.i18n.slice("memory").format(memory=memory)
-
-            
-        knowledge_config = (
-            self.knowledge_config.model_dump() if self.knowledge_config else {}
-        )
-
-        if self.knowledge or (self.crew and self.crew.knowledge):
-            
-            try:
-                self.knowledge_search_query = self._get_knowledge_search_query(
-                    task_prompt, task
-                )
-                if self.knowledge_search_query:
-                    # Quering agent specific knowledge
-                    if self.knowledge:
-                        agent_knowledge_snippets = self.knowledge.query(
-                            [self.knowledge_search_query], **knowledge_config
-                        )
-                        if agent_knowledge_snippets:
-                            self.agent_knowledge_context = extract_knowledge_context(
-                                agent_knowledge_snippets
-                            )
-                            if self.agent_knowledge_context:
-                                task_prompt += self.agent_knowledge_context
-
-                    # Quering crew specific knowledge
-                    knowledge_snippets = self.crew.query_knowledge(
-                        [self.knowledge_search_query], **knowledge_config
-                    )
-                    if knowledge_snippets:
-                        self.crew_knowledge_context = extract_knowledge_context(
-                            knowledge_snippets
-                        )
-                        if self.crew_knowledge_context:
-                            task_prompt += self.crew_knowledge_context
-
-                    
-            except Exception as e:
-                pass
-
-        tools = tools or self.tools or []
-        self.create_agent_executor(tools=tools, task=task)
-
-        if self.crew and self.crew._train:
+        if self.orchestrator and self.orchestrator._train:
             task_prompt = self._training_handler(task_prompt=task_prompt)
         else:
             task_prompt = self._use_trained_data(task_prompt=task_prompt)
 
-        # Import agent events locally to avoid circular imports
+        result = self._execute_without_timeout(task_prompt, task)   
         
-
-        try:
-            
-
-            # Determine execution method based on timeout setting
-            if self.max_execution_time is not None:
-                if (
-                    not isinstance(self.max_execution_time, int)
-                    or self.max_execution_time <= 0
-                ):
-                    raise ValueError(
-                        "Max Execution time must be a positive integer greater than zero"
-                    )
-                result = self._execute_with_timeout(
-                    task_prompt, task, self.max_execution_time
-                )
-            else:
-                result = self._execute_without_timeout(task_prompt, task)
-
-        except TimeoutError as e:
-            # Propagate TimeoutError without retry
-            
-            raise e
-        except Exception as e:
-            if e.__class__.__module__.startswith("litellm"):
-                # Do not retry on litellm errors
-                
-                raise e
-            self._times_executed += 1
-            if self._times_executed > self.max_retry_limit:
-                
-                raise e
-            result = self.execute_task(task, context, tools)
-
-        if self.max_rpm and self._rpm_controller:
-            self._rpm_controller.stop_rpm_counter()
-
-        # If there was any tool in self.tools_results that had result_as_answer
-        # set to True, return the results of the last tool that had
-        # result_as_answer set to True
-        for tool_result in self.tools_results:
-            if tool_result.get("result_as_answer", False):
-                result = tool_result["result"]
-       
 
         self._last_messages = (
             self.agent_executor.messages.copy()
@@ -215,12 +140,12 @@ class Agent(BaseAgent):
             else []
         )
 
-        self._cleanup_mcp_clients()
 
         return result
 
     def create_agent_executor(
-        self, tools: list[BaseTool] | None = None, task: Task | None = None
+        self, 
+        task: Task | None = None
     ) -> None:
         """Create an agent executor for the agent.
 
@@ -255,3 +180,83 @@ class Agent(BaseAgent):
             respect_context_window=self.respect_context_window,
             response_model=task.response_model if task else None,
         )    
+
+    def _training_handler(
+        self,
+        task_prompt: str
+    ) -> str:
+        """Handle training data for the agent task prompt to improve output on Training."""
+        if data := TrainingHandler(TRAINING_DATA_FILE).load():
+            agent_id = str(self.id)
+
+            if data.get(agent_id): 
+                human_feedbacks = [
+                    i["human_feedback"] for i in data.get(agent_id).values()
+                ]
+            
+                task_prompt += (
+                    "\n\nYou MUST follow these instructions: \n "
+                    + "\n - ".join(human_feedbacks)
+                )
+        
+        return task_prompt
+
+
+    def _use_trained_data(self, task_prompt: str) -> str:
+        """Use trained data for the agent task prompt to improve output."""
+        if data := TrainingHandler(TRAINING_DATA_FILE).load():
+            if trained_data_output := data.get(self.role):
+                task_prompt += (
+                    "\n\nYou MUST follow these instructions: \n - "
+                    + "\n - ".join(trained_data_output["suggestions"])
+                )
+        
+        return task_prompt
+
+    def _execute_without_timeout(self, task_prompt: str, task: Task) -> Any:
+        """Execute a task without a timeout.
+
+        Args:
+            task_prompt: The prompt to send to the agent.
+            task: The task being executed.
+
+        Returns:
+            The output of the agent.
+        """
+        if not self.agent_executor:
+            raise RuntimeError("Agent executor is not initialized")
+
+        return self.agent_executor.invoke(
+            {
+                "input": task_prompt,
+                "ask_for_human_input": task.human_input,
+            }
+        )["output"]
+
+
+    def _inject_date_to_task(self, task: Task) -> None:
+        """Inject the current date into the task description."""
+        from datetime import datetime
+
+        try:
+            valid_format_codes = [
+                "%Y",
+                "%m",
+                "%d",
+                "%H",
+                "%M",
+                "%S",
+                "%B",
+                "%b",
+                "%A",
+                "%a",
+            ]
+            is_valid = any(code in self.date_format for code in valid_format_codes)
+
+            if not is_valid:
+                raise ValueError(f"Invalid date format: {self.date_format}")
+
+            current_date = datetime.now().strftime(self.date_format)
+            task.description += f"\n\nCurrent Date: {current_date}"
+        except Exception as e:
+            self._logger.log("warning", f"Failed to inject date: {e!s}")

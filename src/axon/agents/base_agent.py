@@ -14,10 +14,12 @@ from axon.tasks.task import Task
 from axon.prompt.prompt import Prompt, get_prompt
 from axon.utilities.string_utils import interpolate_only
 from axon.utilities.string_utils import interpolate_only
+from axon.utilities.logger import Logger
 
 
 class BaseAgent(BaseModel, ABC):
     uuid: UUID4 = Field(default_factory=uuid.uuid4, frozen=True)
+    id: UUID4 = Field(default_factory=uuid.uuid4, frozen=True)
     name: str = Field()
     llm: LLM = Field()
     task: Task = Field()
@@ -33,6 +35,11 @@ class BaseAgent(BaseModel, ABC):
     _original_role: str | None = PrivateAttr(default=None)
     _original_goal: str | None = PrivateAttr(default=None)
     _original_backstory: str | None = PrivateAttr(default=None)
+    _logger: Logger = PrivateAttr(default_factory=lambda: Logger(verbose=False))
+    max_iter: int = Field(
+        default=25, description="Maximum iterations for an agent to execute a task"
+    )
+
 
     
     def interpolate_inputs(self, inputs: dict[str, Any]) -> None:
@@ -61,12 +68,11 @@ class BaseAgent(BaseModel, ABC):
         self,
         task: Any,
         context: str | None = None,
-        tools: list[BaseTool] | None = None,
-    ) -> str:
+    ) -> Any:
         pass
 
     @abstractmethod
-    def create_agent_executor(self, tools: list[BaseTool] | None = None) -> None:
+    def create_agent_executor(self, task: Task | None = None ) -> None:
         pass
 
     def interpolate_inputs(self, inputs: dict[str, Any]) -> None:

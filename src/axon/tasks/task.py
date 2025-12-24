@@ -30,6 +30,22 @@ class Task(BaseModel):
         default=None,
         description="Whether this task should append 'Trigger Payload: {crewai_trigger_payload}' to the task description when crewai_trigger_payload exists in crew inputs.",
     )
+    output_json: type[BaseModel] | None = Field(
+        description="A Pydantic model to be used to create a JSON output.",
+        default=None,
+    )
+    output_pydantic: type[BaseModel] | None = Field(
+        description="A Pydantic model to be used to create a Pydantic output.",
+        default=None,
+    )
+    response_model: type[BaseModel] | None = Field(
+        description="A Pydantic model for structured LLM outputs using native provider features.",
+        default=None,
+    )
+    human_input: bool | None = Field(
+        description="Whether the task should have a human review the final answer of the agent",
+        default=False,
+    )
 
     def interpolate_inputs_and_add_conversation_history(
         self, inputs: dict[str, str | int | float | dict[str, Any] | list[Any]]
@@ -105,3 +121,43 @@ class Task(BaseModel):
             self.description += (
                 f"\n\n{conversation_instruction}\n\n{conversation_history}"
             )
+    
+    def prompt(self) -> str:
+        """Generates the task prompt with optional markdown formatting.
+
+        When the markdown attribute is True, instructions for formatting the
+        response in Markdown syntax will be added to the prompt.
+
+        Returns:
+            str: The formatted prompt string containing the task description,
+                 expected output, and optional markdown formatting instructions.
+        """
+        description = self.description
+
+        should_inject = self.allow_trigger_context
+
+        if should_inject and self.agent:
+            orchestrator = getattr(self.agent, "orchestrator", None)
+            if orchestrator and hasattr(orchestrator, "_inputs") and orchestrator._inputs:
+                trigger_payload = orchestrator._inputs.get("trigger_payload")
+                if trigger_payload is not None:
+                    description += f"\n\nTrigger Payload: {trigger_payload}"
+
+        tasks_slices = [description]
+
+        output = self.prompt.slice("expected_output").format(
+            expected_output=self.expected_output
+        )
+        tasks_slices = [description, output]
+
+        if self.markdown:
+            markdown_instruction = """Your final answer MUST be formatted in Markdown syntax.
+Follow these guidelines:
+- Use # for headers
+- Use ** for bold text
+- Use * for italic text
+- Use - or * for bullet points
+- Use `code` for inline code
+- Use ```language for code blocks"""
+            tasks_slices.append(markdown_instruction)
+        return "\n".join(tasks_slices)
